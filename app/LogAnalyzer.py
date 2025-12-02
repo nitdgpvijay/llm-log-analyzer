@@ -4,16 +4,15 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
 from IPython.display import Markdown, display
+from llm import get_llm
+from Embedding import getEmbeddings
 
 class LogAnalyzer:
     def __init__(self):
         self.loki_url = os.getenv("LOKI_URL")
         self.loki_api_key = os.getenv("LOKI_API_KEY", "Bearer ")
         self.logs_provider = LogsProvider(self.loki_api_key, self.loki_url)
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not self.openai_api_key:
-            raise ValueError("OPENAI_API_KEY is not set")
-
+        self.embedding = getEmbeddings()
     def anomaly_detector(self, state):
         errors = []
         for line in state["clean_logs"]:
@@ -48,9 +47,9 @@ def main():
     workflow.set_finish_point("rca_model")
     graphApp = workflow.compile()
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=log_analyzer.openai_api_key)
+    llm = get_llm()
     result = graphApp.invoke({
-        "query": '{namespace="gcl-hit", app="cloud-radius"} |= "error"',
+        "query": '{namespace="dev-group2", app="cloud-radius"}',
         "llm": llm,
     })
     markdown_content = Markdown(result.get("answer").content).data

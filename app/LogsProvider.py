@@ -42,7 +42,7 @@ class LogsProvider:
             for stream in data.get("data", {}).get("result", []):
                 labels = stream.get("stream", {})
                 for ts, line in stream.get("values", []):
-                    logs.append({"ts": ts, "line": line, "labels": labels})
+                    logs.append({"timestamp": ts, "line": line, "labels": labels})
 
             state["logs"] = logs
             #print("Fetched logs:", logs)
@@ -59,9 +59,11 @@ class LogsProvider:
         if "logs" not in state:
             print("No logs to normalize")
             return state
-        logs = [l["line"] for l in state["logs"]]
+        # logs = [l["line"] for l in state["logs"]]
         cleaned = []
-        for line in logs:
+        for log in state["logs"]:
+            ts = log["timestamp"]
+            line = log["line"]
              # Try to parse as JSON; if it matches parseable JSON structure, extract relevant fields
             try:
                 log_data = json.loads(line)
@@ -69,7 +71,7 @@ class LogsProvider:
                     "level": log_data.get("level"),
                     "module": log_data.get("module"),
                     "message": log_data.get("message"),
-                    "timestamp": log_data.get("timestamp")
+                    "timestamp": ts
                 }
                 cleaned.append(filtered)
             except Exception:
