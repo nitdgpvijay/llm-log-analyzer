@@ -1,7 +1,6 @@
 from langchain_pinecone import PineconeVectorStore
 from Prompt import get_rca_prompt, get_auth_prompt, get_client_state_prompt
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from llm import get_llm
 from Embedding import getEmbeddings
 from dotenv import load_dotenv
@@ -123,6 +122,7 @@ def query_logs(query: str, k: int = 10) -> str:
         # Enhance query for better retrieval
         input_data["query"] = f"{query} MAC {mac_address}"
     
+    print('Calling chain with input data: ', input_data['query'])
     result = chain.invoke(input_data)
     return result.content
 
