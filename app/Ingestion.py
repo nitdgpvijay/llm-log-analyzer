@@ -46,7 +46,20 @@ def ingest_logs(logs):
         # Build documents with metadata and unique IDs
         docs = []
         ids = []
-        
+        # Also write the raw normalized logs to a local file for auditing/debugging
+        logs_dir = "logs_ingested"
+        os.makedirs(logs_dir, exist_ok=True)
+        log_file_path = os.path.join(logs_dir, "latest_ingest.jsonl")
+        try:
+            with open(log_file_path, "w", encoding="utf-8") as f:
+                for log in logs:
+                    import json
+                    f.write(json.dumps(log, ensure_ascii=False) + "\n")
+            print(f"Wrote {len(logs)} normalized logs to {log_file_path}")
+        except Exception as file_exc:
+            print(f"Failed to write logs to local file: {file_exc}")
+
+        # Ingest into Pinecone - no need to pass metadatas separately as they're in docs
         for i, log in enumerate(logs):
             # Create comprehensive metadata
             timestamp = log.get("timestamp", "")

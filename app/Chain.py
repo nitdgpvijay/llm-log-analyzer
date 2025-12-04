@@ -14,14 +14,14 @@ def convert_nanosecond_timestamps(text: str) -> str:
     """
     Convert nanosecond Unix timestamps in logs to human-readable local time.
     
-    Looks for patterns like [1764871955816534885] and converts them to 
+    Looks for patterns like [1764871955816] and converts them to seconds and then to local time.
     [2025-12-04 10:30:55] format.
     """
     def replace_timestamp(match):
         try:
             nano_timestamp = int(match.group(1))
             # Convert nanoseconds to seconds
-            seconds = nano_timestamp / 1_000_000_000
+            seconds = nano_timestamp / 1_000 # convert to seconds
             # Convert to local datetime
             dt = datetime.fromtimestamp(seconds)
             # Format as readable string

@@ -88,7 +88,8 @@ class LogsProvider:
         
         cleaned = []
         for log in state["logs"]:
-            ts = log["timestamp"]
+            # ts is in nanoseconds, convert to milliseconds
+            ts = int(int(log["timestamp"]) / 1_000_000)
             line = log["line"]
             
             # Try to parse as JSON; if it matches parseable JSON structure, extract relevant fields
@@ -96,7 +97,6 @@ class LogsProvider:
                 log_data = json.loads(line)
                 filtered = {
                     "level": log_data.get("level", "unknown"),
-                    "module": log_data.get("module", "unknown"),
                     "message": log_data.get("message", line),  # Fallback to raw line
                     "timestamp": ts
                 }
