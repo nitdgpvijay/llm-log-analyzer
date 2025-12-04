@@ -5,6 +5,7 @@ from llm import get_llm
 from Embedding import getEmbeddings
 from dotenv import load_dotenv
 from operator import itemgetter
+from datetime import datetime, timedelta, timezone
 import os
 import re
 
@@ -25,6 +26,61 @@ def extract_mac_address(query: str) -> str | None:
         match = re.search(pattern, query)
         if match:
             return match.group(0)
+    return None
+
+
+def extract_time_range(query: str) -> dict | None:
+    """
+    Extract time range from query (e.g., 'last hour', 'last 30 minutes').
+    
+    Returns:
+        Dictionary with 'cutoff_time' and 'description', or None if no time range found
+    """
+    query_lower = query.lower()
+    current_time = datetime.now(timezone.utc)
+    
+    # Pattern: "last X hour(s)"
+    match = re.search(r'last\s+(\d+)\s+hours?', query_lower)
+    if match:
+        hours = int(match.group(1))
+        cutoff = current_time - timedelta(hours=hours)
+        return {
+            'cutoff_time': cutoff,
+            'description': f'last {hours} hour{"s" if hours > 1 else ""}',
+            'current_time': current_time
+        }
+    
+    # Pattern: "last X minute(s)"
+    match = re.search(r'last\s+(\d+)\s+minutes?', query_lower)
+    if match:
+        minutes = int(match.group(1))
+        cutoff = current_time - timedelta(minutes=minutes)
+        return {
+            'cutoff_time': cutoff,
+            'description': f'last {minutes} minute{"s" if minutes > 1 else ""}',
+            'current_time': current_time
+        }
+    
+    # Pattern: "last X day(s)"
+    match = re.search(r'last\s+(\d+)\s+days?', query_lower)
+    if match:
+        days = int(match.group(1))
+        cutoff = current_time - timedelta(days=days)
+        return {
+            'cutoff_time': cutoff,
+            'description': f'last {days} day{"s" if days > 1 else ""}',
+            'current_time': current_time
+        }
+    
+    # Pattern: just "last hour" (default to 1)
+    if 'last hour' in query_lower or 'past hour' in query_lower:
+        cutoff = current_time - timedelta(hours=1)
+        return {
+            'cutoff_time': cutoff,
+            'description': 'last hour',
+            'current_time': current_time
+        }
+    
     return None
 
 
@@ -111,16 +167,31 @@ def query_logs(query: str, k: int = 10) -> str:
         The LLM's response content
     """
     query_type = detect_query_type(query)
-    chain = get_chain(query_type=query_type, k=k)
+    
+    # Extract time range if present
+    time_range = extract_time_range(query)
+    
+    # Increase k if time filtering is needed (we'll retrieve more and let LLM filter)
+    retrieval_k = k * 3 if time_range else k
+    
+    chain = get_chain(query_type=query_type, k=retrieval_k)
     
     # Prepare input based on query type
-    input_data = {"query": query}
+    enhanced_query = query
+    
+    # Add time context to help LLM understand the time filtering requirement
+    if time_range:
+        current_time_str = time_range['current_time'].strftime('%Y-%m-%dT%H:%M:%S')
+        cutoff_time_str = time_range['cutoff_time'].strftime('%Y-%m-%dT%H:%M:%S')
+        enhanced_query = f"{query}\n\nIMPORTANT: Current time is {current_time_str}. Only consider logs from {time_range['description']} (after {cutoff_time_str})."
+    
+    input_data = {"query": enhanced_query}
     
     if query_type == 'client_state':
         mac_address = extract_mac_address(query)
         input_data["mac_address"] = mac_address or "Not specified"
         # Enhance query for better retrieval
-        input_data["query"] = f"{query} MAC {mac_address}"
+        input_data["query"] = f"{enhanced_query} MAC {mac_address}"
     
     print('Calling chain with input data: ', input_data['query'])
     result = chain.invoke(input_data)

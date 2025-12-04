@@ -1,50 +1,106 @@
-import hashlib, json, time, os
+import hashlib
+import os
 from langchain_pinecone import PineconeVectorStore
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
 from Embedding import getEmbeddings
 from dotenv import load_dotenv
 from LogsProvider import LogsProvider
+from langchain_core.documents import Document
 
-splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-
-def make_point_id(line_text, ts, labels, idx):
+def make_point_id(line_text, ts, level, idx):
+    """
+    Generate a unique ID for a log entry using SHA1 hash.
+    
+    Args:
+        line_text: The log message content
+        ts: Timestamp of the log
+        level: Log level (e.g., 'info', 'error')
+        idx: Index of the log in the batch
+        
+    Returns:
+        Hexadecimal hash string
+    """
     h = hashlib.sha1()
-    h.update((str(ts) + json.dumps(labels, sort_keys=True) + line_text[:200]).encode())
-    h.update(str(idx).encode())
+    # Use first 200 chars of message + timestamp + level + index for uniqueness
+    content = f"{ts}|{level}|{line_text[:200]}|{idx}"
+    h.update(content.encode('utf-8'))
     return h.hexdigest()
 
 
 def ingest_logs(logs):
-    print(f"Ingesting {len(logs)} logs")
-    # build chunks
-    docs = []
-    metadatas = []
-    ids = []
-    for i, l in enumerate(logs):
-        print(f"Ingesting log {i}: {l}")
-        chunks = splitter.split_text(l["message"])
-        for j, chunk in enumerate(chunks):
-            meta = {"orig_ts": l["timestamp"], "labels": l["level"]}
-            docs.append(chunk)
-            metadatas.append(meta)
-            ids.append(make_point_id(chunk, l["timestamp"], l["level"], j))
-
-    if not docs:
-        print("No documents to ingest")
-        return
-
-    #chroma_client = Chroma(persist_directory="chroma_db", embedding_function=getEmbeddings())
-    # ingest into Pinecone
-    PineconeVectorStore.from_texts(texts=docs, embedding=getEmbeddings(), index_name=os.getenv("PINECONE_INDEX_NAME"), metadatas=metadatas, ids=ids, namespace=os.getenv("PINECONE_NAMESPACE"), text_key="text" )
-    return {"indexed": len(docs)}
+    """
+    Ingest logs into Pinecone vector store.
+    
+    Args:
+        logs: List of normalized log dictionaries with keys: timestamp, level, module, message
+        
+    Returns:
+        Dictionary with 'indexed' count or None on error
+    """
+    if not logs:
+        print("No logs to ingest")
+        return {"indexed": 0}
+    
+    print(f"Preparing {len(logs)} logs for ingestion...")
+    
+    try:
+        # Build documents with metadata and unique IDs
+        docs = []
+        ids = []
+        
+        for i, log in enumerate(logs):
+            # Create comprehensive metadata
+            timestamp = log.get("timestamp", "")
+            level = log.get("level", "unknown")
+            
+            metadata = {
+                "timestamp": timestamp,
+                "level": level
+            }
+            
+            # Create document with message as content
+            message = log.get("message", "")
+            if not message:
+                continue  # Skip logs with empty messages
+            
+            # Format content with timestamp and metadata for LLM context
+            # This allows LLM to filter by time and understand context
+            content = f"[{timestamp}] [{level.upper()}] {message}"
+                
+            docs.append(Document(page_content=content, metadata=metadata))
+            
+            # Generate unique ID for deduplication
+            ids.append(make_point_id(message, timestamp, level, i))
+        
+        if not docs:
+            print("No valid documents to ingest (all messages were empty)")
+            return {"indexed": 0}
+        
+        print(f"Ingesting {len(docs)} documents into Pinecone...")
+        
+        # Ingest into Pinecone - no need to pass metadatas separately as they're in docs
+        PineconeVectorStore.from_documents(
+            documents=docs,
+            embedding=getEmbeddings(),
+            index_name=os.getenv("PINECONE_INDEX_NAME"),
+            ids=ids,
+            namespace=os.getenv("PINECONE_NAMESPACE")
+        )
+        
+        print(f"Successfully ingested {len(docs)} documents")
+        return {"indexed": len(docs)}
+        
+    except Exception as e:
+        print(f"Error during ingestion: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def main():
     load_dotenv()
     logs_provider = LogsProvider(os.getenv("LOKI_API_KEY"), os.getenv("LOKI_URL"))
-    state = {"query": '{namespace="dev-group2", app="cloud-radius"}'}
-    logs = logs_provider.get_logs(state)
+    state = {"query": '{namespace="dev-group2", app="cloud-radius", container=~"cloud-radius|gorad"}'}
+    logs_provider.get_logs(state)
     logs_provider.normalize_logs(state)
     result = ingest_logs(state["clean_logs"])
     print(result)

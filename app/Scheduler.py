@@ -26,17 +26,50 @@ class LogScheduler:
         self.loki_query = loki_query
         self.interval_seconds = interval_seconds
         self.lookback_buffer_seconds = lookback_buffer_seconds
-        self.last_fetch_time = None
+        self.last_fetch_time_file = "last_sync_time.txt"
+        self.last_fetch_time = self._load_last_fetch_time()
         self.running = False
         
         # Deduplication: track ingested log hashes
         self.seen_log_hashes = set()
         self.max_seen_hashes = 10000  # Limit memory usage
 
+    def _load_last_fetch_time(self):
+        """Load the last fetch time from file system."""
+        try:
+            if os.path.exists(self.last_fetch_time_file):
+                with open(self.last_fetch_time_file, 'r') as f:
+                    timestamp_str = f.read().strip()
+                    if timestamp_str:
+                        last_time = datetime.fromisoformat(timestamp_str)
+                        # Ensure timezone awareness
+                        if last_time.tzinfo is None:
+                            last_time = last_time.replace(tzinfo=timezone.utc)
+                        print(f"Loaded last sync time from file: {last_time.isoformat()}")
+                        return last_time
+        except Exception as e:
+            print(f"Error loading last fetch time from file: {e}")
+        return None
+
+    def _save_last_fetch_time(self):
+        """Save the last fetch time to file system."""
+        try:
+            if self.last_fetch_time:
+                with open(self.last_fetch_time_file, 'w') as f:
+                    f.write(self.last_fetch_time.isoformat())
+        except Exception as e:
+            print(f"Error saving last fetch time to file: {e}")
+
     def _compute_log_hash(self, log: dict) -> str:
         """Compute a unique hash for a log entry to detect duplicates."""
         h = hashlib.sha256()
-        content = f"{log.get('timestamp', '')}{log.get('message', '')}{log.get('level', '')}"
+        
+        # Handle both dict and string types for robustness
+        if isinstance(log, str):
+            content = log
+        else:
+            content = f"{log.get('timestamp', '')}{log.get('message', '')}{log.get('level', '')}"
+        
         h.update(content.encode('utf-8'))
         return h.hexdigest()
 
@@ -80,6 +113,7 @@ class LogScheduler:
             if not state.get("logs"):
                 print("No logs fetched from Loki")
                 self.last_fetch_time = current_time
+                self._save_last_fetch_time()
                 return
             
             print(f"Fetched {len(state['logs'])} logs from Loki")
@@ -90,6 +124,7 @@ class LogScheduler:
             if not state.get("clean_logs"):
                 print("No logs after normalization")
                 self.last_fetch_time = current_time
+                self._save_last_fetch_time()
                 return
             
             # Deduplicate logs
@@ -103,6 +138,7 @@ class LogScheduler:
             if not unique_logs:
                 print("All logs were duplicates, skipping ingestion")
                 self.last_fetch_time = current_time
+                self._save_last_fetch_time()
                 return
             
             # Ingest into Pinecone
@@ -112,6 +148,7 @@ class LogScheduler:
                 print(f"Successfully ingested {result['indexed']} documents into Pinecone")
             
             self.last_fetch_time = current_time
+            self._save_last_fetch_time()
             
         except Exception as e:
             print(f"Error during fetch and ingest: {e}")
@@ -135,11 +172,20 @@ class LogScheduler:
         while self.running:
             try:
                 print(f"\nWaiting {self.interval_seconds} seconds until next fetch...")
-                time.sleep(self.interval_seconds)
+                
+                # Sleep in 1-second intervals to respond quickly to stop signals
+                for i in range(self.interval_seconds):
+                    if not self.running:
+                        break
+                    time.sleep(1)
                 
                 if self.running:
                     self.fetch_and_ingest()
                     
+            except KeyboardInterrupt:
+                print("\nKeyboard interrupt received")
+                self.stop()
+                break
             except Exception as e:
                 print(f"Error in scheduler loop: {e}")
                 if not self.running:
