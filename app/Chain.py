@@ -10,8 +10,39 @@ import os
 import re
 
 
+def convert_nanosecond_timestamps(text: str) -> str:
+    """
+    Convert nanosecond Unix timestamps in logs to human-readable local time.
+    
+    Looks for patterns like [1764871955816534885] and converts them to 
+    [2025-12-04 10:30:55] format.
+    """
+    def replace_timestamp(match):
+        try:
+            nano_timestamp = int(match.group(1))
+            # Convert nanoseconds to seconds
+            seconds = nano_timestamp / 1_000_000_000
+            # Convert to local datetime
+            dt = datetime.fromtimestamp(seconds)
+            # Format as readable string
+            return f"[{dt.strftime('%Y-%m-%d %H:%M:%S')}]"
+        except (ValueError, OSError):
+            # If conversion fails, return original
+            return match.group(0)
+    
+    # Pattern to match timestamps in brackets that are 18-19 digits (nanoseconds)
+    pattern = r'\[(\d{18,19})\]'
+    return re.sub(pattern, replace_timestamp, text)
+
+
 def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+    """
+    Format retrieved documents into a single string with human-readable timestamps.
+    Converts nanosecond timestamps to local time format.
+    """
+    formatted_content = "\n\n".join(doc.page_content for doc in docs)
+    # Convert nanosecond timestamps to readable format
+    return convert_nanosecond_timestamps(formatted_content)
 
 
 def extract_mac_address(query: str) -> str | None:
@@ -102,6 +133,73 @@ def detect_query_type(query: str) -> str:
     return 'general'
 
 
+def augment_query(query: str, query_type: str) -> str:
+    """
+    Augment query with domain-specific keywords to improve retrieval.
+    
+    Args:
+        query: Original user query
+        query_type: Detected query type ('general', 'authentication', 'client_state')
+    
+    Returns:
+        Augmented query with additional relevant keywords
+    """
+    query_lower = query.lower()
+    augmented_parts = [query]
+    
+    if query_type == 'authentication':
+        # Add RADIUS-specific terms for authentication queries
+        augmentation_terms = []
+        
+        # If query mentions successful/failed, add corresponding RADIUS codes
+        if any(kw in query_lower for kw in ['successful', 'success', 'accepted']):
+            augmentation_terms.append('Access-Accept')
+        elif any(kw in query_lower for kw in ['failed', 'failure', 'rejected', 'denied']):
+            augmentation_terms.append('Access-Reject')
+        else:
+            # Generic authentication query - add both
+            augmentation_terms.extend(['Access-Accept', 'Access-Reject'])
+        
+        # Add RADIUS if not already mentioned
+        if 'radius' not in query_lower:
+            augmentation_terms.append('RADIUS')
+        
+        if augmentation_terms:
+            augmented_parts.append(' '.join(augmentation_terms))
+    
+    elif query_type == 'client_state':
+        # Add client/device related terms
+        augmentation_terms = []
+        augmentation_terms.append('Could not verify Client Certificate')
+        
+        if 'state' not in query_lower and 'status' not in query_lower:
+            augmentation_terms.append('state status')
+        
+        if 'client' not in query_lower and 'device' not in query_lower:
+            augmentation_terms.append('client device')
+        
+        if augmentation_terms:
+            augmented_parts.append(' '.join(augmentation_terms))
+    
+    elif query_type == 'general':
+        # For general queries, add common log analysis terms
+        error_keywords = ['error', 'failure', 'exception', 'critical', 'warning']
+        if any(kw in query_lower for kw in error_keywords):
+            if 'error' not in query_lower:
+                augmented_parts.append('error')
+            if 'exception' not in query_lower:
+                augmented_parts.append('exception')
+    
+    # Combine original query with augmentation terms
+    augmented = ' '.join(augmented_parts)
+    
+    # Print augmentation for debugging
+    if augmented != query:
+        print(f"Query augmented: '{query}' -> '{augmented}'")
+    
+    return augmented
+
+
 def get_vector_store():
     """Get the Pinecone vector store instance."""
     return PineconeVectorStore(
@@ -168,6 +266,9 @@ def query_logs(query: str, k: int = 10) -> str:
     """
     query_type = detect_query_type(query)
     
+    # Augment query with domain-specific keywords for better retrieval
+    augmented_query = augment_query(query, query_type)
+    
     # Extract time range if present
     time_range = extract_time_range(query)
     
@@ -177,13 +278,13 @@ def query_logs(query: str, k: int = 10) -> str:
     chain = get_chain(query_type=query_type, k=retrieval_k)
     
     # Prepare input based on query type
-    enhanced_query = query
+    enhanced_query = augmented_query
     
     # Add time context to help LLM understand the time filtering requirement
     if time_range:
         current_time_str = time_range['current_time'].strftime('%Y-%m-%dT%H:%M:%S')
         cutoff_time_str = time_range['cutoff_time'].strftime('%Y-%m-%dT%H:%M:%S')
-        enhanced_query = f"{query}\n\nIMPORTANT: Current time is {current_time_str}. Only consider logs from {time_range['description']} (after {cutoff_time_str})."
+        enhanced_query = f"{augmented_query}\n\nIMPORTANT: Current time is {current_time_str}. Only consider logs from {time_range['description']} (after {cutoff_time_str})."
     
     input_data = {"query": enhanced_query}
     

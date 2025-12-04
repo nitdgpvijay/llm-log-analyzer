@@ -4,7 +4,7 @@ from Chain import query_logs
 
 # Load environment variables
 load_dotenv()
-st.header("LLM powered Logs Analyzer")
+st.header("AI-Powered Unified Log Tracing for Cloud Services")
 
 if "user_prompt_history" not in st.session_state:
     st.session_state.user_prompt_history = []

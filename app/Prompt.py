@@ -2,9 +2,9 @@
 rca_prompt_template = """You are an expert cloud debugging assistant who knows RADIUS authentication protocol.
 Given the following log snippets and metadata, answer the question.
 
-IMPORTANT: Each log entry starts with [TIMESTAMP] [LEVEL] [MODULE] format. 
+IMPORTANT: Each log entry starts with [YYYY-MM-DD HH:MM:SS] [LEVEL] format. 
 If the query mentions a time range (e.g., "last hour", "last 30 minutes"), you MUST:
-1. Parse the timestamp from each log entry
+1. Parse the timestamp from each log entry (format: YYYY-MM-DD HH:MM:SS)
 2. Compare it with the time constraint mentioned in the query
 3. Only include logs that fall within the specified time range in your analysis
 
@@ -19,7 +19,7 @@ Answer:
 auth_prompt_template = """You are an expert cloud debugging assistant who knows RADIUS authentication protocol.
 Analyze the following RADIUS authentication logs and provide a summary.
 
-IMPORTANT: Each log entry starts with [TIMESTAMP] [LEVEL] [MODULE] format.
+IMPORTANT: Each log entry starts with [YYYY-MM-DD HH:MM:SS] [LEVEL] format.
 If the query mentions a time range (e.g., "last hour", "last 30 minutes"), you MUST filter logs by timestamp.
 
 Log Context:
@@ -28,7 +28,8 @@ Log Context:
 Query: {query}
 
 Instructions:
-- Each log has format: [TIMESTAMP] [LEVEL] [MODULE] message
+- Each log has format: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
+- Timestamps are in local time, human-readable format
 - If time filtering is required, parse timestamps and only analyze logs within the specified time range
 - Identify authentication attempts (Access-Request, Access-Accept, Access-Reject)
 - Extract relevant details like MAC address, NAS-IP, username, timestamp
@@ -43,7 +44,7 @@ Answer:
 client_state_prompt_template = """You are an expert cloud debugging assistant who knows RADIUS authentication protocol.
 Analyze the following logs to determine the client state for the specified MAC address.
 
-IMPORTANT: Each log entry starts with [TIMESTAMP] [LEVEL] [MODULE] format.
+IMPORTANT: Each log entry starts with [YYYY-MM-DD HH:MM:SS] [LEVEL] format.
 If the query mentions a time range, filter logs by comparing the timestamp with the specified time constraint.
 
 Log Context:
@@ -53,7 +54,8 @@ Query: {query}
 MAC Address: {mac_address}
 
 Instructions:
-- Each log has format: [TIMESTAMP] [LEVEL] [MODULE] message
+- Each log has format: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
+- Timestamps are in local time, human-readable format
 - If time filtering is required, parse timestamps and only analyze logs within the specified time range
 - Track the authentication flow for this specific MAC address
 - Identify current state (authenticated, rejected, pending, disconnected)
