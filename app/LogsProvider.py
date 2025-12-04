@@ -8,23 +8,31 @@ class LogsProvider:
         self.api_key = api_key
         self.loki_url = loki_url.rstrip("/")
 
-    def get_logs(self, state: dict):
+    def get_logs(self, state: dict, start_time: datetime = None, end_time: datetime = None, limit: int = 100):
         """
         Fetch logs from Loki given a state dictionary.
-        Returns logs as a string.
+        
+        Args:
+            state: Dictionary containing the query and will be updated with logs
+            start_time: Optional start time for the query window (defaults to 1 hour ago)
+            end_time: Optional end time for the query window (defaults to now)
+            limit: Maximum number of logs to fetch (default: 100)
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}"
         }
         params = {
             "query": state.get("query", ""),
-            "limit": 10,  # You may configure limit as needed
+            "limit": limit,
             "direction": "BACKWARD"
         }
 
-        # Calculate end time (now) and start time (one hour ago) in RFC3339Nano/ISO format
-        end_time = datetime.now(timezone.utc)
-        start_time = end_time - timedelta(hours=1)
+        # Use provided times or default to last hour
+        if end_time is None:
+            end_time = datetime.now(timezone.utc)
+        if start_time is None:
+            start_time = end_time - timedelta(hours=1)
+            
         end_str = self.to_nanos(end_time)
         start_str = self.to_nanos(start_time)
 

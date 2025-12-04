@@ -1,18 +1,22 @@
 import os
 import time
+import signal
+import hashlib
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from LogsProvider import LogsProvider
 from Ingestion import ingest_logs
 
+
 class LogScheduler:
-    def __init__(self, loki_query: str, interval_seconds: int = 60):
+    def __init__(self, loki_query: str, interval_seconds: int = 60, lookback_buffer_seconds: int = 10):
         """
         Initialize the scheduler with Loki query and interval.
         
         Args:
             loki_query: The Loki query to fetch logs
             interval_seconds: How often to fetch logs (default: 60 seconds)
+            lookback_buffer_seconds: Extra seconds to look back for deduplication overlap (default: 10)
         """
         load_dotenv()
         self.logs_provider = LogsProvider(
@@ -21,8 +25,37 @@ class LogScheduler:
         )
         self.loki_query = loki_query
         self.interval_seconds = interval_seconds
+        self.lookback_buffer_seconds = lookback_buffer_seconds
         self.last_fetch_time = None
         self.running = False
+        
+        # Deduplication: track ingested log hashes
+        self.seen_log_hashes = set()
+        self.max_seen_hashes = 10000  # Limit memory usage
+
+    def _compute_log_hash(self, log: dict) -> str:
+        """Compute a unique hash for a log entry to detect duplicates."""
+        h = hashlib.sha256()
+        content = f"{log.get('timestamp', '')}{log.get('message', '')}{log.get('level', '')}"
+        h.update(content.encode('utf-8'))
+        return h.hexdigest()
+
+    def _deduplicate_logs(self, logs: list) -> list:
+        """Remove logs that have already been ingested."""
+        unique_logs = []
+        for log in logs:
+            log_hash = self._compute_log_hash(log)
+            if log_hash not in self.seen_log_hashes:
+                unique_logs.append(log)
+                self.seen_log_hashes.add(log_hash)
+        
+        # Prune old hashes if exceeding limit
+        if len(self.seen_log_hashes) > self.max_seen_hashes:
+            hashes_list = list(self.seen_log_hashes)
+            self.seen_log_hashes = set(hashes_list[-(self.max_seen_hashes // 2):])
+            print(f"Pruned seen hashes from {len(hashes_list)} to {len(self.seen_log_hashes)}")
+        
+        return unique_logs
 
     def fetch_and_ingest(self):
         """Fetch logs from Loki and ingest them into Pinecone."""
@@ -32,11 +65,21 @@ class LogScheduler:
             
             state = {"query": self.loki_query}
             
-            # Fetch logs from Loki
-            self.logs_provider.get_logs(state)
+            # Calculate time window
+            end_time = current_time
+            if self.last_fetch_time:
+                start_time = self.last_fetch_time - timedelta(seconds=self.lookback_buffer_seconds)
+                print(f"Fetching logs from {start_time.isoformat()} to {end_time.isoformat()}")
+            else:
+                start_time = end_time - timedelta(hours=1)
+                print("First run: fetching logs from last hour")
+            
+            # Fetch logs from Loki with time window
+            self.logs_provider.get_logs(state, start_time=start_time, end_time=end_time)
             
             if not state.get("logs"):
                 print("No logs fetched from Loki")
+                self.last_fetch_time = current_time
                 return
             
             print(f"Fetched {len(state['logs'])} logs from Loki")
@@ -46,10 +89,24 @@ class LogScheduler:
             
             if not state.get("clean_logs"):
                 print("No logs after normalization")
+                self.last_fetch_time = current_time
+                return
+            
+            # Deduplicate logs
+            original_count = len(state["clean_logs"])
+            unique_logs = self._deduplicate_logs(state["clean_logs"])
+            duplicates_removed = original_count - len(unique_logs)
+            
+            if duplicates_removed > 0:
+                print(f"Removed {duplicates_removed} duplicate logs")
+            
+            if not unique_logs:
+                print("All logs were duplicates, skipping ingestion")
+                self.last_fetch_time = current_time
                 return
             
             # Ingest into Pinecone
-            result = ingest_logs(state["clean_logs"])
+            result = ingest_logs(unique_logs)
             
             if result:
                 print(f"Successfully ingested {result['indexed']} documents into Pinecone")
@@ -58,6 +115,8 @@ class LogScheduler:
             
         except Exception as e:
             print(f"Error during fetch and ingest: {e}")
+            import traceback
+            traceback.print_exc()
 
     def start(self):
         """Start the scheduler loop."""
@@ -65,6 +124,10 @@ class LogScheduler:
         print(f"Starting log scheduler with {self.interval_seconds}s interval")
         print(f"Loki query: {self.loki_query}")
         print("-" * 50)
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
         
         # Run immediately on start
         self.fetch_and_ingest()
@@ -77,10 +140,15 @@ class LogScheduler:
                 if self.running:
                     self.fetch_and_ingest()
                     
-            except KeyboardInterrupt:
-                print("\nReceived interrupt signal, stopping scheduler...")
-                self.stop()
-                break
+            except Exception as e:
+                print(f"Error in scheduler loop: {e}")
+                if not self.running:
+                    break
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals gracefully."""
+        print(f"\nReceived signal {signum}, stopping scheduler...")
+        self.stop()
 
     def stop(self):
         """Stop the scheduler."""
@@ -97,7 +165,8 @@ def main():
     # Create scheduler with 1 minute (60 seconds) interval
     scheduler = LogScheduler(
         loki_query=loki_query,
-        interval_seconds=60  # 1 minute
+        interval_seconds=60,  # 1 minute
+        lookback_buffer_seconds=10  # 10 second overlap for safety
     )
     
     # Start the scheduler
@@ -106,4 +175,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
