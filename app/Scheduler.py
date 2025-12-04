@@ -75,7 +75,7 @@ class LogScheduler:
                 print("First run: fetching logs from last hour")
             
             # Fetch logs from Loki with time window
-            self.logs_provider.get_logs(state, start_time=start_time, end_time=end_time)
+            self.logs_provider.get_logs(state, start_time=start_time, end_time=end_time, limit=1000)
             
             if not state.get("logs"):
                 print("No logs fetched from Loki")
@@ -160,7 +160,7 @@ def main():
     load_dotenv()
     
     # Configure your Loki query here
-    loki_query = '{namespace="dev-group2", app="cloud-radius"}'
+    loki_query = '{namespace="dev-group2", app="cloud-radius", container=~"cloud-radius|gorad"}'
     
     # Create scheduler with 1 minute (60 seconds) interval
     scheduler = LogScheduler(
